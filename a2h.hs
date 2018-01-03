@@ -102,12 +102,11 @@ type IOParse = ExceptT String IO
 
 --------------------------------------------------------------------------------
 -- | Parse an input ASCII-HEX string
-parseHex :: String -> IOParse String
 parseHex [] = return [] 
 parseHex (a:b:xs) = case readHex [a,b] of
   [(v,"")] -> ((chr v):) <$> parseHex xs
-  _        -> throwE $ "String \"" ++ show [a,b] ++ "\" is invalid."
-parseHex _ =  throwE $ "Invalid number of ASCII characters"
+  _        -> Left $ "String \"" ++ show [a,b] ++ "\" is invalid."
+parseHex _ =  Left $ "Invalid number of ASCII characters"
 
 --------------------------------------------------------------------------------
 -- | Write successful parsed @res@ to the handle @outfile@.
@@ -119,7 +118,7 @@ putBinary outfile res = runExceptT res >>= either reportError putOutput
 --------------------------------------------------------------------------------
 -- | Parse the contents of a file from handle @infile@.
 parseHandle :: Handle -> IOParse String
-parseHandle infile = ExceptT $ hGetContents infile >>= runExceptT . parseHex . filter (not . isSpace)
+parseHandle = undefined -- infile = ExceptT $ hGetContents infile >>= runExceptT . parseHex . filter (not . isSpace)
 
 --------------------------------------------------------------------------------
 -- | Parse the contents of a file located at @inpath@.
@@ -137,3 +136,9 @@ readInput (InFiles fs) = foldM (\acc name -> (acc ++) <$> parseFile name) [] fs
 writeOutput :: OutputSink -> IOParse String -> IO ()
 writeOutput Stdout      parse = putBinary stdout parse
 writeOutput (OutFile f) parse = withFile f WriteMode $ \outfile -> putBinary outfile parse
+
+
+-- with parseHex returning Either String String
+-- mapM (\n -> ExceptT $ readFile n >>= return .  parseHex . filter (not . isSpace))
+-- runExceptT m3 >>= either (hPutStr stderr) (print)
+--
