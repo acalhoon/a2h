@@ -79,47 +79,41 @@ optionsParser =
 
 --------------------------------------------------------------------------------
 -- | Parse command line options and report usage on failure.
--- main :: IO ()
--- main = a2h =<< OA.execParser opts
---   where opts = OA.info (OA.helper <*> optionsParser)
---                        (OA.fullDesc <> desc <> hdr)
---         desc = OA.progDesc " Read ASCII-HEX input and attempt to convert it \
---                            \ to binary output."
---         hdr  = OA.header "a2h - converts input ASCII-HEX into binary"
-
 main :: IO ()
-main = undefined
+main = a2h =<< OA.execParser opts
+  where opts = OA.info (OA.helper <*> optionsParser)
+                       (OA.fullDesc <> desc <> hdr)
+        desc = OA.progDesc " Read ASCII-HEX input and attempt to convert it \
+                           \ to binary output."
+        hdr  = OA.header "a2h - converts input ASCII-HEX into binary"
 
--- putHandle :: Handle
---           -> Handle
---           -> IO ()
--- putHandle infile outfile = (parseHex <$> hGetContents infile) >>= either putError (putBinary outfile)
--- 
--- a2h :: Options -> IO ()
--- a2h opt = case sink opt of
---   Stdout       -> withFile "test.txt" ReadMode $ \h -> putHandle h stdout
---   OutFile name -> withFile "test.txt" ReadMode  $ \infile ->
---                   withFile name       WriteMode $ \outfile -> putHandle infile outfile
+a2h opt = do
+  me <- runExceptT $ readInput (source opt)
+  either (hPutStrLn stderr) (writeOutput (sink opt)) me
 
 --------------------------------------------------------------------------------
 -- | Parse an input ASCII-HEX string
-parseHex :: Handle -> String -> ExceptT String IO ()
-parseHex _ [] = return ()
-parseHex outfile (a:b:xs) = case readHex [a,b] of
-  [(v,"")] -> liftIO (hPutChar outfile . chr $ v) >> parseHex outfile xs
-  _        -> throwE $ "String \"" ++ [a,b] ++ "\" is invalid."
-parseHex _ _  = throwE $ "Invalid number of ASCII characters"
+parseHex :: String -> ExceptT String IO [Int]
+parseHex [] = return [] 
+parseHex (a:b:xs) = case readHex [a,b] of
+  [(v,"")] -> (v:) <$> parseHex xs
+  _        -> throwE $ "String \"" ++ show [a,b] ++ "\" is invalid."
+parseHex _ =  throwE $ "Invalid number of ASCII characters"
 
 putBinary :: Handle -> [Int] -> IO ()
 putBinary outfile = traverse_ (hPutChar outfile . chr)
 
-parseFile outfile inpath =
- withFile inpath ReadMode $ \infile ->
- hGetContents infile >>= \s ->
- runExceptT (parseHex outfile s)
+parseFile :: FilePath -> ExceptT String IO [Int]
+parseFile inpath = do
+ ExceptT $ withFile inpath ReadMode $ \infile ->
+           hGetContents infile >>= \s ->
+           runExceptT $ parseHex s
 
-temp outfile = mapM (\name -> parseFile outfile name) ["test.txt", "test.txt", "test - Copy.txt"]
+readInput :: InputSource -> ExceptT String IO [Int]
+readInput Stdin        = liftIO (hGetContents stdin) >>= parseHex
+readInput (InFiles fs) = foldM (\acc name -> (acc ++) <$> parseFile name) [] fs
 
-putError :: String -> IO ()
-putError = hPutStrLn stderr
+writeOutput :: OutputSink -> [Int] -> IO ()
+writeOutput Stdout      xs = putBinary stdout xs
+writeOutput (OutFile f) xs = withFile f WriteMode $ flip putBinary xs
 
