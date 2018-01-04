@@ -23,6 +23,7 @@ executable a2h
   build-depends:       base >=4.8 && <4.11,
                        optparse-applicative >=0.14 && <0.15,
                        transformers >=0.4 && <0.6,
-                       directory >=1.2 && <1.4
+                       directory >=1.2 && <1.4,
+                       temporary >= 1.2 && <1.3
   -- hs-source-dirs:      
   default-language:    Haskell2010

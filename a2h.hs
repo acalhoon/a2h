@@ -13,15 +13,15 @@
 --------------------------------------------------------------------------------
 module Main where
 
-import           Control.Monad              (foldM)
-import           Control.Monad.IO.Class     (liftIO)
-import           Control.Monad.Trans.Except (ExceptT(..), runExceptT, throwE)
+import           Control.Exception          (Exception, throwIO, onException)
+import           Control.Monad              (void, mapM_)
 import           Data.Char                  (isSpace, chr)
-import           Data.Foldable              (traverse_)
 import           Data.Monoid                ((<>))
 import           Numeric                    (readHex)
 import qualified Options.Applicative        as OA
+import           System.Directory           (removeFile)
 import           System.IO
+import           System.IO.Temp             (withSystemTempFile)
 
 --------------------------------------------------------------------------------
 -- | Input data source.
@@ -94,46 +94,63 @@ main = a2h =<< OA.execParser opts
 --------------------------------------------------------------------------------
 -- | Turn command line arguments @opt@ into output.
 a2h :: Options -> IO ()
-a2h opt = writeOutput (sink opt) (readInput $ source opt)
+a2h opt = runA2H (source opt) (sink opt)
 
 --------------------------------------------------------------------------------
--- | Parsing computation within IO.
-type IOParse = ExceptT String IO 
+-- | Parsing exceptions
+data ParseError = InvalidData String -- ^ invalid data found and reported
+                | InvalidLength      -- ^ data length prevented accurate parsing
+instance Exception ParseError
 
 --------------------------------------------------------------------------------
--- | Parse an input ASCII-HEX string
-parseHex :: String -> IOParse String
-parseHex [] = return [] 
-parseHex (a:b:xs) = case readHex [a,b] of
-  [(v,"")] -> ((chr v):) <$> parseHex xs
-  _        -> throwE $ "String \"" ++ show [a,b] ++ "\" is invalid."
-parseHex _ =  throwE $ "Invalid number of ASCII characters"
+-- | Common ParseError header message.
+parseExcHeader :: String
+parseExcHeader = "Parse Error: "
 
 --------------------------------------------------------------------------------
--- | Write successful parsed @res@ to the handle @outfile@.
-putBinary :: Handle -> IOParse String -> IO ()
-putBinary outfile res = runExceptT res >>= either reportError putOutput
-   where reportError = hPutStrLn stderr
-         putOutput = traverse_ (liftIO . hPutChar outfile)
+-- | Allow ParseError exceptions to show details on failure.
+instance Show ParseError where
+  show (InvalidData s) = parseExcHeader ++ "input contains invalid hex -- " ++ s
+  show InvalidLength = parseExcHeader ++ "ran out of input"
 
 --------------------------------------------------------------------------------
--- | Parse the contents of a file from handle @infile@.
-parseHandle :: Handle -> IOParse String
-parseHandle infile = ExceptT $ hGetContents infile >>= runExceptT . parseHex . filter (not . isSpace)
+-- | Parse an ASCII-HEX string writing its contents converted contents to
+-- @outfile@.
+parseHex :: String -> Handle -> IO ()
+parseHex [] _ = return () 
+parseHex (a:b:xs) outfile = case readHex [a,b] of
+  [(v,"")] -> (hPutChar outfile $ chr v) >> parseHex xs outfile
+  _        ->  throwIO $ InvalidData (show [a,b])
+parseHex _ _ = throwIO $ InvalidLength
 
 --------------------------------------------------------------------------------
--- | Parse the contents of a file located at @inpath@.
-parseFile :: FilePath -> IOParse String
-parseFile inpath = ExceptT $ withFile inpath ReadMode $ runExceptT . parseHandle
+-- | Read input from @infile@ and write its parsed results to @outfile@.
+parseHandleTo :: Handle -> Handle -> IO ()
+parseHandleTo infile outfile =
+  hGetContents infile >>= flip parseHex outfile . filter (not . isSpace)
 
 --------------------------------------------------------------------------------
--- | Reads input from the specified source(s) and attempts to parse it.
-readInput :: InputSource -> IOParse String
-readInput Stdin        = parseHandle stdin
-readInput (InFiles fs) = foldM (\acc name -> (acc ++) <$> parseFile name) [] fs
+-- | Read input from the file at @inpath@ and write its parsed results to
+-- @outfile@.
+parseFileTo :: FilePath -> Handle -> IO ()
+parseFileTo inpath outfile = withFile inpath ReadMode $ flip parseHandleTo outfile
 
 --------------------------------------------------------------------------------
--- | Writes successfully parsed input to the output sink.
-writeOutput :: OutputSink -> IOParse String -> IO ()
-writeOutput Stdout      parse = putBinary stdout parse
-writeOutput (OutFile f) parse = withFile f WriteMode $ \outfile -> putBinary outfile parse
+-- | Reads input from the specified source(s) and writes the successful output
+-- to @outfile@.
+runParse :: InputSource -> Handle -> IO ()
+runParse Stdin outfile = parseHandleTo stdin outfile
+runParse (InFiles fs) outfile = mapM_ (flip parseFileTo outfile) fs
+
+--------------------------------------------------------------------------------
+-- | Parse from input to output.
+runA2H :: InputSource -> OutputSink -> IO ()
+runA2H src Stdout =
+  withSystemTempFile "a2h.bin" $ \_ h -> do
+    runParse src h
+    hSeek h AbsoluteSeek 0
+    s <- hGetContents h
+    putStr s
+runA2H src (OutFile path) = mkFile path `onException` rmFile path
+  where mkFile n = withFile n WriteMode $ runParse src
+        rmFile = void . removeFile
