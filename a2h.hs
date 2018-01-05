@@ -121,7 +121,7 @@ parseInput input = case input of
   Stdin        -> parse <$> getContents
   (InFiles fs) -> fmap concat <$> (runExceptT $ mapM parseFile fs)
   where parse = parseHex . filter (not . isSpace)
-        parseFile name = ExceptT . liftIO $ withFile name ReadMode parseHandle
+        parseFile name = ExceptT $ withFile name ReadMode parseHandle
         parseHandle h = parse <$!> hGetContents h
 
 --------------------------------------------------------------------------------
