@@ -13,6 +13,9 @@
 --------------------------------------------------------------------------------
 module Main where
 
+import           Control.Monad              ((<$!>))
+import           Control.Monad.IO.Class     (liftIO)
+import           Control.Monad.Trans.Except (ExceptT(..), runExceptT)
 import           Data.Char                  (isSpace, chr)
 import           Data.Monoid                ((<>))
 import           Numeric                    (readHex)
@@ -95,31 +98,34 @@ a2h opt = writeOutput (sink opt) (parseInput $ source opt)
 --------------------------------------------------------------------------------
 -- | Parsing computation within IO.
 type Error = String
+type ParseResult = Either Error String
 
 --------------------------------------------------------------------------------
 -- | Parse an input ASCII-HEX string
-parseHex :: String -> Either Error String
+parseHex :: String -> ParseResult
 parseHex [] = return [] 
 parseHex (a:b:xs) = case readHex [a,b] of
   [(v,"")] -> (chr v:) <$> parseHex xs
-  _        -> Left $ "String \"" ++ show [a,b] ++ "\" is invalid."
+  _        -> Left $ "String " ++ show [a,b] ++ " is invalid."
 parseHex _ =  Left $ "Invalid number of ASCII characters"
 
 --------------------------------------------------------------------------------
 -- | Write successful parsed @res@ to the handle @outfile@.
-putParseResult :: Handle -> IO (Either Error String) -> IO ()
-putParseResult outfile res = res >>= either (hPutStrLn stderr) (hPutStr outfile)
+runParseResult :: IO ParseResult -> Handle -> IO ()
+runParseResult result outfile = result >>= either (hPutStrLn stderr) (hPutStr outfile)
 
 --------------------------------------------------------------------------------
 -- | Reads input from the specified source(s) and attempts to parse it.
-parseInput :: InputSource -> IO (Either Error String)
+parseInput :: InputSource -> IO ParseResult
 parseInput input = case input of
   Stdin        -> parse <$> getContents
-  (InFiles fs) -> parse . concat <$> mapM readFile fs
+  (InFiles fs) -> fmap concat <$> (runExceptT $ mapM parseFile fs)
   where parse = parseHex . filter (not . isSpace)
+        parseFile name = ExceptT . liftIO $ withFile name ReadMode parseHandle
+        parseHandle h = parse <$!> hGetContents h
 
 --------------------------------------------------------------------------------
 -- | Writes successfully parsed input to the output sink.
-writeOutput :: OutputSink -> IO (Either Error String) -> IO ()
-writeOutput Stdout      parse = putParseResult stdout parse
-writeOutput (OutFile f) parse = withFile f WriteMode $ \outfile -> putParseResult outfile parse
+writeOutput :: OutputSink -> IO ParseResult -> IO ()
+writeOutput Stdout      parse = runParseResult parse stdout
+writeOutput (OutFile f) parse = withFile f WriteMode $ runParseResult parse
