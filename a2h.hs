@@ -13,12 +13,8 @@
 --------------------------------------------------------------------------------
 module Main where
 
-import           Control.Exception          (IOException, try, throw)
-import           Control.Monad
--- import           Control.Monad              ((<$!>))
-import           Control.Monad.IO.Class     (liftIO)
-import           Control.Monad.Trans.Except
--- import           Control.Monad.Trans.Except (ExceptT(..), runExceptT)
+import           Control.Exception          (Exception, IOException, try, throwIO)
+import           Control.Monad              (void)
 import           Data.Char                  (isSpace, chr)
 import           Data.Monoid                ((<>))
 import           Numeric                    (readHex)
@@ -31,7 +27,6 @@ import           System.IO.Temp
 -- | Input data source.
 data InputSource = Stdin              -- ^ Input coming from stdin.
                  | InFiles [FilePath] -- ^ Input coming from file(s).
-  deriving (Show)
 
 --------------------------------------------------------------------------------
 -- | Output data sink.
@@ -99,66 +94,57 @@ main = a2h =<< OA.execParser opts
 --------------------------------------------------------------------------------
 -- | Turn command line arguments @opt@ into output.
 a2h :: Options -> IO ()
-a2h = undefined -- opt = writeOutput (sink opt) (parseInput $ source opt)
+a2h opt = writeOutput (sink opt) (source opt)
 
 --------------------------------------------------------------------------------
 -- | Parsing computation within IO.
-type Error = String
-type ParseResult = Either Error ()
-
 data ParseError = InvalidData String
                 | InvalidLength
+instance Exception ParseError
+
+instance Show ParseError where
+  show (InvalidData s) = "Parse Error: input contains invalid hex -- " ++ s
+  show InvalidLength = "Parse Error: ran out of input"
 
 --------------------------------------------------------------------------------
--- | Parse an input ASCII-HEX string
--- parseHex :: Handle -> String -> ExceptT Error IO ()
+-- | Parse ASCII-HEX string and write its contents converted contents to @h@.
+parseHex :: Handle -> String -> IO ()
 parseHex _ [] = return () 
 parseHex h (a:b:xs) = case readHex [a,b] of
   [(v,"")] -> (hPutChar h $ chr v) >> parseHex h xs
-  _        -> throw $ InvalidData (show [a,b])
-
--- "String " ++ show [a,b] ++ " is invalid."
-
-parseHex _ _ = throw $ InvalidLength
--- "Invalid number of ASCII characters"
-
-showParseException (InvalidData s) = "Parse error: input contains invalid hex -- " ++ s
-showParseException InvalidLength = "Parse error: ran out of input before a valid hex pair was found."
+  _        ->  throwIO $ InvalidData (show [a,b])
+parseHex _ _ = throwIO $ InvalidLength
 
 --------------------------------------------------------------------------------
--- | Write successful parsed @res@ to the handle @outfile@.
-runParseResult :: IO a -> IO a -> ParseResult -> IO a
-runParseResult doFail doSuccess = either (\err -> reportFailure err >> doFail) (\_ -> doSuccess)
-  where reportFailure exc = hPutStr stderr "Parse error: " >> hPutStrLn stderr (showParseException exc)
+-- | Handle parsing failure/success.
+runParseResult :: IO a -> IO a -> Either ParseError () -> IO a
+runParseResult doFail doSuccess = either (\exc -> reportExc exc >> doFail) (\_ -> doSuccess)
+  where reportExc = hPutStrLn stderr . show
 
 --------------------------------------------------------------------------------
--- | Reads input from the specified source(s) and attempts to parse it.
--- parseInput :: InputSource -> Handle -> IO ParseResult
-parseInput :: InputSource -> Handle -> IO ParseResult
+-- | Reads input from the specified source(s) and attempts to parse it while
+-- writing output to @outfile@.
+parseInput :: InputSource -> Handle -> IO ()
 parseInput input outfile = case input of
-  Stdin        -> runExceptT $ liftIO getContents >>= parse
-  (InFiles fs) -> runExceptT . mapM_ parseFile $ fs
+  Stdin        -> getContents >>= parse
+  (InFiles fs) -> mapM_ parseFile fs
   where parse = parseHex outfile . filter (not . isSpace)
-        parseHandle infile = parse <$> (liftIO $ hGetContents infile)
-        parseFile name = liftIO $ withFile name ReadMode (runExceptT . parseHandle)
+        parseHandle infile = hGetContents infile >>= parse
+        parseFile name = withFile name ReadMode parseHandle
 
 --------------------------------------------------------------------------------
 -- | Writes successfully parsed input to the output sink.
 writeOutput :: OutputSink -> InputSource -> IO ()
 writeOutput Stdout infiles =
   withSystemTempFile "a2h.bin" $ \_ h -> do
-    e <- parseInput infiles h
+    e <- try $ parseInput infiles h
     runParseResult (return ()) (dumpTemp h) e
   where dumpTemp h = do { hSeek h AbsoluteSeek 0; s <- hGetContents h; putStr s }
-
 writeOutput (OutFile f) infiles =  do
-  success <- withFile f WriteMode $ \h -> do
-    e <- parseInput infiles h
-    runParseResult (return False) (return True) e
-  unless success $ tryDelete f
+  e <- try $ withFile f WriteMode $ \h -> do
+    parseInput infiles h 
+  runParseResult (tryDelete f) (return ()) e
+  where tryDelete = void . tryIOE . removeFile
 
 tryIOE :: IO a -> IO (Either IOException a)
 tryIOE = try
-
-tryDelete :: String -> IO ()
-tryDelete name = void $ tryIOE $ removeFile name
