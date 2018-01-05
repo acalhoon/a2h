@@ -14,7 +14,6 @@
 module Main where
 
 import           Control.Monad              ((<$!>))
-import           Control.Monad.IO.Class     (liftIO)
 import           Control.Monad.Trans.Except (ExceptT(..), runExceptT)
 import           Data.Char                  (isSpace, chr)
 import           Data.Monoid                ((<>))
