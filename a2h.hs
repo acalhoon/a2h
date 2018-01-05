@@ -13,7 +13,7 @@
 --------------------------------------------------------------------------------
 module Main where
 
-import           Control.Exception          (IOException, try)
+import           Control.Exception          (IOException, try, throw)
 import           Control.Monad
 -- import           Control.Monad              ((<$!>))
 import           Control.Monad.IO.Class     (liftIO)
@@ -31,6 +31,7 @@ import           System.IO.Temp
 -- | Input data source.
 data InputSource = Stdin              -- ^ Input coming from stdin.
                  | InFiles [FilePath] -- ^ Input coming from file(s).
+  deriving (Show)
 
 --------------------------------------------------------------------------------
 -- | Output data sink.
@@ -105,20 +106,30 @@ a2h = undefined -- opt = writeOutput (sink opt) (parseInput $ source opt)
 type Error = String
 type ParseResult = Either Error ()
 
+data ParseError = InvalidData String
+                | InvalidLength
+
 --------------------------------------------------------------------------------
 -- | Parse an input ASCII-HEX string
-parseHex :: Handle -> String -> ExceptT Error IO ()
+-- parseHex :: Handle -> String -> ExceptT Error IO ()
 parseHex _ [] = return () 
 parseHex h (a:b:xs) = case readHex [a,b] of
-  [(v,"")] -> liftIO (hPutChar h $ chr v) >> parseHex h xs
-  _        -> throwE $ "String " ++ show [a,b] ++ " is invalid."
-parseHex _ _ =  throwE $ "Invalid number of ASCII characters"
+  [(v,"")] -> (hPutChar h $ chr v) >> parseHex h xs
+  _        -> throw $ InvalidData (show [a,b])
+
+-- "String " ++ show [a,b] ++ " is invalid."
+
+parseHex _ _ = throw $ InvalidLength
+-- "Invalid number of ASCII characters"
+
+showParseException (InvalidData s) = "Parse error: input contains invalid hex -- " ++ s
+showParseException InvalidLength = "Parse error: ran out of input before a valid hex pair was found."
 
 --------------------------------------------------------------------------------
 -- | Write successful parsed @res@ to the handle @outfile@.
 runParseResult :: IO a -> IO a -> ParseResult -> IO a
 runParseResult doFail doSuccess = either (\err -> reportFailure err >> doFail) (\_ -> doSuccess)
-  where reportFailure err = hPutStr stderr "Parse error: " >> hPutStrLn stderr err
+  where reportFailure exc = hPutStr stderr "Parse error: " >> hPutStrLn stderr (showParseException exc)
 
 --------------------------------------------------------------------------------
 -- | Reads input from the specified source(s) and attempts to parse it.
