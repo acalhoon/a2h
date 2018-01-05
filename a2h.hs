@@ -111,13 +111,19 @@ parseFile action name = withFile name ReadMode $ parseHandle action
 
 parseHandle action handle = runExceptT $ liftIO (hGetContents handle) >>= parseHex action . filter (not . isSpace)
 
-parseInputs outfile (InFiles fs) = mapM (parseFile (hPutChar outfile)) fs >>= \es -> return . sequence_ $ es
+parseInputs outfile (InFiles fs) = sequence_ <$> mapM (parseFile (hPutChar outfile)) fs
 parseInputs outfile Stdin = parseHandle (hPutChar outfile) stdin
 
-putFile name = withFile name WriteMode $ \h -> parseInputs h (InFiles ["test.txt", "test.txt"]) >>= \e -> return (e >>= \_ -> return name)
+runFile infiles outname outhandle = do
+  me <- parseInputs outhandle infiles
+  return $ me >> return outname
 
-runFile = putFile "temp" >>= either (hPutStrLn stderr) (\_ -> return ())
+putFile name = withFile name WriteMode $ \h -> runFile name h (InFiles ["test.txt", "test.txt"])
 
+withFile name WriteMode $ \h -> runFile infiles name h
+withSystemTempFile "a2h_dummy.bin" $ \ name h -> runFile infiles name h
+
+runParse = putFile "temp" >>= either (hPutStrLn stderr) (\_ -> return ())
 
 -- --------------------------------------------------------------------------------
 -- -- | Write successful parsed @res@ to the handle @outfile@.
